@@ -1,6 +1,6 @@
 // Authentication context for managing user state across the app
 
-// src/context/AuthContext.tsx - Updated for Supabase
+// src/context/AuthContext.tsx - Fixed version
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import { User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
@@ -43,22 +43,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [authState, setAuthState] = useState<AuthState>(defaultAuthState)
 
   useEffect(() => {
+    let mounted = true
+
     // Get initial session
     const getInitialSession = async () => {
       try {
+        console.log('Getting initial session...')
+        
         const { data: { session }, error } = await supabase.auth.getSession()
         
+        if (!mounted) return
+        
         if (error) {
-          console.error('Error getting session:', error)
+          console.error('Error getting initial session:', error)
           setAuthState({
             user: null,
             isAuthenticated: false,
             isLoading: false,
-            error: error.message,
+            error: null, // Don't show error for initial session failure
           })
           return
         }
 
+        console.log('Initial session:', session?.user?.email || 'No session')
+        
         setAuthState({
           user: session?.user ?? null,
           isAuthenticated: !!session?.user,
@@ -67,11 +75,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         })
       } catch (error) {
         console.error('Error in getInitialSession:', error)
+        if (!mounted) return
+        
         setAuthState({
           user: null,
           isAuthenticated: false,
           isLoading: false,
-          error: 'Failed to initialize authentication',
+          error: null, // Don't show initialization errors to user
         })
       }
     }
@@ -81,19 +91,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log('Auth state changed:', event, session?.user?.email)
+        if (!mounted) return
         
-        setAuthState({
+        console.log('Auth state changed:', event, session?.user?.email || 'No user')
+        
+        // Handle the auth state change
+        setAuthState(prev => ({
+          ...prev,
           user: session?.user ?? null,
           isAuthenticated: !!session?.user,
           isLoading: false,
           error: null,
-        })
+        }))
 
         // Handle specific auth events
         switch (event) {
           case 'SIGNED_IN':
-            console.log('User signed in')
+            console.log('User signed in successfully')
             break
           case 'SIGNED_OUT':
             console.log('User signed out')
@@ -102,17 +116,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.log('Password recovery initiated')
             break
           case 'TOKEN_REFRESHED':
-            console.log('Token refreshed')
+            console.log('Token refreshed successfully')
             break
           case 'USER_UPDATED':
-            console.log('User updated')
+            console.log('User profile updated')
             break
+          case 'INITIAL_SESSION':
+            console.log('Initial session loaded')
+            break
+          default:
+            console.log('Auth event:', event)
         }
       }
     )
 
-    // Cleanup subscription
+    // Cleanup function
     return () => {
+      mounted = false
       subscription.unsubscribe()
     }
   }, [])
@@ -121,17 +141,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthState(prev => ({ ...prev, isLoading: true, error: null }))
     
     try {
+      console.log('Attempting to register user:', email)
       const { user, error } = await authRegister(email, password, phone)
       
       if (error || !user) {
+        console.error('Registration failed:', error)
         setAuthState(prev => ({ ...prev, isLoading: false, error }))
         return { success: false, error }
       }
       
+      console.log('Registration successful:', user.email)
       // Auth state will be updated by the onAuthStateChange listener
       return { success: true, error: null }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Registration failed'
+      console.error('Registration error:', errorMessage)
       setAuthState(prev => ({ ...prev, isLoading: false, error: errorMessage }))
       return { success: false, error: errorMessage }
     }
@@ -141,17 +165,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthState(prev => ({ ...prev, isLoading: true, error: null }))
     
     try {
+      console.log('Attempting to login user:', emailOrPhone)
       const { user, error } = await authLogin(emailOrPhone, password)
       
       if (error || !user) {
+        console.error('Login failed:', error)
         setAuthState(prev => ({ ...prev, isLoading: false, error }))
         return { success: false, error }
       }
       
+      console.log('Login successful:', user.email)
       // Auth state will be updated by the onAuthStateChange listener
       return { success: true, error: null }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Login failed'
+      console.error('Login error:', errorMessage)
       setAuthState(prev => ({ ...prev, isLoading: false, error: errorMessage }))
       return { success: false, error: errorMessage }
     }
@@ -161,16 +189,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthState(prev => ({ ...prev, isLoading: true }))
     
     try {
+      console.log('Attempting to logout user')
       const { error } = await authLogout()
       
       if (error) {
+        console.error('Logout failed:', error)
         setAuthState(prev => ({ ...prev, isLoading: false, error }))
         return
       }
       
+      console.log('Logout successful')
       // Auth state will be updated by the onAuthStateChange listener
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Logout failed'
+      console.error('Logout error:', errorMessage)
       setAuthState(prev => ({ ...prev, isLoading: false, error: errorMessage }))
     }
   }
