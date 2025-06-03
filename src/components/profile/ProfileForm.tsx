@@ -1,256 +1,349 @@
-import React, { useState, useEffect } from 'react';
-import { User, Calendar, Scale as Male, Scale as Female, Users, Image as ImageIcon, UserPlus } from 'lucide-react';
+// src/components/profile/ProfileForm.tsx - Enhanced with searchable dropdowns
+import React, { useState, useEffect, useRef } from 'react';
+import { User, Calendar, Scale as Male, Scale as Female, Users, Image as ImageIcon, UserPlus, Search, X } from 'lucide-react';
 import Input from '../ui/Input';
 import Select from '../ui/Select';
 import Button from '../ui/Button';
 import { useProfile } from '../../context/ProfileContext';
-import { Profile } from '../../types';
-import { getProfileById } from '../../services/localStorage';
-import { findRelatives } from '../../services/profile';
+import { Profile, CreateProfileData } from '../../types';
+import { searchProfiles } from '../../services/profile';
 
 interface ProfileFormProps {
   onSuccess?: () => void;
   existingProfile?: Profile;
 }
 
+interface SearchableSelectProps {
+  value: string;
+  onChange: (profileId: string, profileName: string) => void;
+  placeholder: string;
+  icon: React.ReactNode;
+  gender?: 'male' | 'female';
+  excludeIds?: string[];
+  label: string;
+  error?: string;
+}
+
+// Searchable dropdown component for selecting relatives
+const SearchableSelect: React.FC<SearchableSelectProps> = ({
+  value,
+  onChange,
+  placeholder,
+  icon,
+  gender,
+  excludeIds = [],
+  label,
+  error
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState<Profile[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Search for profiles when search term changes
+  useEffect(() => {
+    const performSearch = async () => {
+      if (searchTerm.length < 2) {
+        setSearchResults([]);
+        return;
+      }
+
+      setIsLoading(true);
+      try {
+        const results = await searchProfiles(searchTerm, 10);
+        let filteredResults = results.filter(profile => !excludeIds.includes(profile.id));
+        
+        // Filter by gender if specified
+        if (gender) {
+          filteredResults = filteredResults.filter(profile => profile.gender === gender);
+        }
+        
+        setSearchResults(filteredResults);
+      } catch (error) {
+        console.error('Search error:', error);
+        setSearchResults([]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    const debounceTimer = setTimeout(performSearch, 300);
+    return () => clearTimeout(debounceTimer);
+  }, [searchTerm, gender, excludeIds]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = e.target.value;
+    setSearchTerm(newValue);
+    setIsOpen(newValue.length >= 2);
+    
+    // Clear selection if user is typing something different
+    if (selectedProfile && !newValue.includes(selectedProfile.full_name)) {
+      setSelectedProfile(null);
+      onChange('', '');
+    }
+  };
+
+  const handleSelectProfile = (profile: Profile) => {
+    setSelectedProfile(profile);
+    setSearchTerm(profile.full_name);
+    onChange(profile.id, profile.full_name);
+    setIsOpen(false);
+  };
+
+  const handleClearSelection = () => {
+    setSelectedProfile(null);
+    setSearchTerm('');
+    onChange('', '');
+    setIsOpen(false);
+    inputRef.current?.focus();
+  };
+
+  const getDisplayName = (profile: Profile) => {
+    let name = profile.full_name;
+    if (profile.family_name) {
+      name += ` (${profile.family_name})`;
+    }
+    if (profile.date_of_birth) {
+      const age = new Date().getFullYear() - new Date(profile.date_of_birth).getFullYear();
+      name += ` - ${age} years`;
+    }
+    return name;
+  };
+
+  return (
+    <div className="mb-4">
+      <label className="block text-sm font-medium text-gray-700 mb-1">
+        {label}
+      </label>
+      <div className="relative" ref={dropdownRef}>
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            {icon}
+          </div>
+          <input
+            ref={inputRef}
+            type="text"
+            value={searchTerm}
+            onChange={handleInputChange}
+            onFocus={() => searchTerm.length >= 2 && setIsOpen(true)}
+            placeholder={placeholder}
+            className={`w-full pl-10 pr-10 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent ${
+              error ? 'border-red-500' : 'border-gray-300'
+            }`}
+          />
+          {selectedProfile && (
+            <button
+              type="button"
+              onClick={handleClearSelection}
+              className="absolute inset-y-0 right-0 pr-3 flex items-center"
+            >
+              <X size={16} className="text-gray-400 hover:text-gray-600" />
+            </button>
+          )}
+          {!selectedProfile && searchTerm.length >= 2 && (
+            <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+              <Search size={16} className="text-gray-400" />
+            </div>
+          )}
+        </div>
+
+        {isOpen && (
+          <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
+            {isLoading ? (
+              <div className="p-3 text-center text-gray-500">
+                <div className="animate-spin w-4 h-4 border-2 border-gray-300 border-top-teal-600 rounded-full mx-auto mb-2"></div>
+                Searching...
+              </div>
+            ) : searchResults.length > 0 ? (
+              <div>
+                {searchResults.map((profile) => (
+                  <div
+                    key={profile.id}
+                    className="p-3 hover:bg-gray-100 cursor-pointer flex items-center"
+                    onClick={() => handleSelectProfile(profile)}
+                  >
+                    <div className="flex-shrink-0 mr-3">
+                      {profile.gender === 'male' ? (
+                        <Male size={16} className="text-blue-600" />
+                      ) : (
+                        <Female size={16} className="text-pink-600" />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-medium text-gray-900">{profile.full_name}</div>
+                      {(profile.family_name || profile.date_of_birth) && (
+                        <div className="text-sm text-gray-500">
+                          {profile.family_name && `Family: ${profile.family_name}`}
+                          {profile.family_name && profile.date_of_birth && ' • '}
+                          {profile.date_of_birth && `Born: ${new Date(profile.date_of_birth).getFullYear()}`}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : searchTerm.length >= 2 ? (
+              <div className="p-3 text-center text-gray-500">
+                <div className="mb-2">No {gender ? `${gender} ` : ''}profiles found matching "{searchTerm}"</div>
+                <div className="text-xs text-gray-400">
+                  {gender === 'male' ? 'Only male profiles are shown' : gender === 'female' ? 'Only female profiles are shown' : 'All profiles are searched'}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+      {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
+      {searchTerm.length > 0 && searchTerm.length < 2 && (
+        <p className="mt-1 text-sm text-gray-500">Type at least 2 characters to search</p>
+      )}
+    </div>
+  );
+};
+
 const ProfileForm: React.FC<ProfileFormProps> = ({ onSuccess, existingProfile }) => {
   const { createUserProfile, updateProfile, isLoading, error: profileError } = useProfile();
   
   const [formData, setFormData] = useState({
-    familyName: existingProfile?.familyName || '',
+    family_name: existingProfile?.family_name || '',
     initial: existingProfile?.initial || '',
-    fullName: existingProfile?.fullName || '',
+    full_name: existingProfile?.full_name || '',
     gender: existingProfile?.gender || 'male',
-    dateOfBirth: existingProfile?.dateOfBirth || '',
-    maritalStatus: existingProfile?.maritalStatus || 'unmarried',
-    fatherId: existingProfile?.fatherId || '',
-    fatherName: '',
-    motherId: existingProfile?.motherId || '',
-    motherName: '',
-    spouseId: existingProfile?.spouseId || '',
-    spouseName: '',
-    profilePicture: existingProfile?.profilePicture || '',
-    children: [] as { name: string, gender: 'male' | 'female' | 'other' }[],
+    date_of_birth: existingProfile?.date_of_birth || '',
+    marital_status: existingProfile?.marital_status || 'unmarried',
+    father_id: existingProfile?.father_id || '',
+    father_name: existingProfile?.father_name || '',
+    mother_id: existingProfile?.mother_id || '',
+    mother_name: existingProfile?.mother_name || '',
+    spouse_id: existingProfile?.spouse_id || '',
+    spouse_name: existingProfile?.spouse_name || '',
+    profile_picture_url: existingProfile?.profile_picture_url || '',
   });
   
   const [errors, setErrors] = useState({
-    fullName: '',
+    full_name: '',
     gender: '',
-    dateOfBirth: '',
-    fatherId: '',
-    motherId: '',
-    spouseId: '',
+    date_of_birth: '',
   });
-  
-  const [fatherSearchResults, setFatherSearchResults] = useState<Profile[]>([]);
-  const [motherSearchResults, setMotherSearchResults] = useState<Profile[]>([]);
-  const [spouseSearchResults, setSpouseSearchResults] = useState<Profile[]>([]);
-  
-  useEffect(() => {
-    if (existingProfile) {
-      if (existingProfile.fatherId) {
-        const father = getProfileById(existingProfile.fatherId);
-        if (father) {
-          setFormData(prev => ({ ...prev, fatherName: father.fullName }));
-        }
-      }
-      
-      if (existingProfile.motherId) {
-        const mother = getProfileById(existingProfile.motherId);
-        if (mother) {
-          setFormData(prev => ({ ...prev, motherName: mother.fullName }));
-        }
-      }
-      
-      if (existingProfile.spouseId) {
-        const spouse = getProfileById(existingProfile.spouseId);
-        if (spouse) {
-          setFormData(prev => ({ ...prev, spouseName: spouse.fullName }));
-        }
-      }
-    }
-  }, [existingProfile]);
-  
-  const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
-  ) => {
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
     setErrors({ ...errors, [name]: '' });
     
     // Reset spouse-related fields when changing marital status to unmarried
-    if (name === 'maritalStatus' && value === 'unmarried') {
+    if (name === 'marital_status' && value === 'unmarried') {
       setFormData(prev => ({
         ...prev,
-        spouseId: '',
-        spouseName: '',
-        children: [],
+        spouse_id: '',
+        spouse_name: '',
         [name]: value
       }));
     }
   };
-  
+
   const handleProfilePictureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setFormData(prev => ({ ...prev, profilePicture: reader.result as string }));
+        setFormData(prev => ({ ...prev, profile_picture_url: reader.result as string }));
       };
       reader.readAsDataURL(file);
     }
   };
-  
-  const handleAddChild = () => {
+
+  const handleRelativeSelect = (type: 'father' | 'mother' | 'spouse', profileId: string, profileName: string) => {
     setFormData(prev => ({
       ...prev,
-      children: [...prev.children, { name: '', gender: 'male' }]
+      [`${type}_id`]: profileId,
+      [`${type}_name`]: profileName,
+      // Update marital status if spouse is selected
+      ...(type === 'spouse' && profileId ? { marital_status: 'married' } : {})
     }));
   };
-  
-  const handleChildChange = (index: number, field: 'name' | 'gender', value: string) => {
-    setFormData(prev => ({
-      ...prev,
-      children: prev.children.map((child, i) => 
-        i === index ? { ...child, [field]: value } : child
-      )
-    }));
-  };
-  
-  const handleRemoveChild = (index: number) => {
-    setFormData(prev => ({
-      ...prev,
-      children: prev.children.filter((_, i) => i !== index)
-    }));
-  };
-  
-  const handleRelativeSearch = (type: 'father' | 'mother' | 'spouse', query: string) => {
-    if (query.length < 2) {
-      if (type === 'father') setFatherSearchResults([]);
-      if (type === 'mother') setMotherSearchResults([]);
-      if (type === 'spouse') setSpouseSearchResults([]);
-      return;
-    }
-    
-    const results = findRelatives(query);
-    const filteredResults = existingProfile 
-      ? results.filter(p => p.id !== existingProfile.id)
-      : results;
-    
-    if (type === 'father') {
-      setFatherSearchResults(filteredResults.filter(p => p.gender === 'male'));
-    } else if (type === 'mother') {
-      setMotherSearchResults(filteredResults.filter(p => p.gender === 'female'));
-    } else {
-      setSpouseSearchResults(filteredResults.filter(p => 
-        p.id !== formData.fatherId && p.id !== formData.motherId
-      ));
-    }
-  };
-  
-  const handleRelativeSelect = (type: 'father' | 'mother' | 'spouse', profile: Profile) => {
-    if (type === 'father') {
-      setFormData({ 
-        ...formData, 
-        fatherId: profile.id, 
-        fatherName: profile.fullName 
-      });
-      setFatherSearchResults([]);
-    } else if (type === 'mother') {
-      setFormData({ 
-        ...formData, 
-        motherId: profile.id, 
-        motherName: profile.fullName 
-      });
-      setMotherSearchResults([]);
-    } else {
-      setFormData({ 
-        ...formData, 
-        spouseId: profile.id, 
-        spouseName: profile.fullName,
-        maritalStatus: 'married'
-      });
-      setSpouseSearchResults([]);
-    }
-  };
-  
+
   const validateForm = (): boolean => {
     const newErrors = {
-      fullName: '',
+      full_name: '',
       gender: '',
-      dateOfBirth: '',
-      fatherId: '',
-      motherId: '',
-      spouseId: '',
+      date_of_birth: '',
     };
     
-    if (!formData.fullName.trim()) {
-      newErrors.fullName = 'Full name is required';
+    if (!formData.full_name.trim()) {
+      newErrors.full_name = 'Full name is required';
     }
     
     if (!formData.gender) {
       newErrors.gender = 'Gender is required';
     }
     
-    if (formData.dateOfBirth) {
-      const birthDate = new Date(formData.dateOfBirth);
+    if (formData.date_of_birth) {
+      const birthDate = new Date(formData.date_of_birth);
       const today = new Date();
       
       if (birthDate > today) {
-        newErrors.dateOfBirth = 'Date of birth cannot be in the future';
+        newErrors.date_of_birth = 'Date of birth cannot be in the future';
       }
     }
     
     setErrors(newErrors);
-    
-    return !newErrors.fullName && !newErrors.gender && !newErrors.dateOfBirth;
+    return !newErrors.full_name && !newErrors.gender && !newErrors.date_of_birth;
   };
-  
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!validateForm()) return;
     
+    const profileData: CreateProfileData = {
+      family_name: formData.family_name || undefined,
+      initial: formData.initial || undefined,
+      full_name: formData.full_name,
+      gender: formData.gender as 'male' | 'female' | 'other',
+      date_of_birth: formData.date_of_birth || undefined,
+      marital_status: formData.marital_status as 'married' | 'unmarried',
+      profile_picture_url: formData.profile_picture_url || undefined,
+      father_id: formData.father_id || undefined,
+      mother_id: formData.mother_id || undefined,
+      spouse_id: formData.spouse_id || undefined,
+    };
+
+    let result;
     if (existingProfile) {
-      const updatedProfile: Profile = {
-        ...existingProfile,
-        familyName: formData.familyName,
-        initial: formData.initial,
-        fullName: formData.fullName,
-        gender: formData.gender as 'male' | 'female' | 'other',
-        dateOfBirth: formData.dateOfBirth || undefined,
-        maritalStatus: formData.maritalStatus as 'married' | 'unmarried',
-        fatherId: formData.fatherId || undefined,
-        motherId: formData.motherId || undefined,
-        spouseId: formData.spouseId || undefined,
-        profilePicture: formData.profilePicture || undefined,
-      };
-      
-      const { success } = await updateProfile(updatedProfile);
-      
-      if (success && onSuccess) {
-        onSuccess();
-      }
+      result = await updateProfile(existingProfile.id, profileData);
     } else {
-      const { success } = await createUserProfile(
-        formData.fullName,
-        formData.gender as 'male' | 'female' | 'other',
-        formData.dateOfBirth || undefined,
-        formData.fatherId || undefined,
-        formData.motherId || undefined,
-        formData.spouseId || undefined,
-        formData.familyName,
-        formData.initial,
-        formData.maritalStatus as 'married' | 'unmarried',
-        formData.profilePicture
-      );
-      
-      if (success && onSuccess) {
-        onSuccess();
-      }
+      result = await createUserProfile(profileData);
+    }
+    
+    if (result.success && onSuccess) {
+      onSuccess();
     }
   };
-  
+
+  // Get exclude IDs to prevent circular relationships
+  const excludeIds = [
+    existingProfile?.id,
+    formData.father_id,
+    formData.mother_id,
+    formData.spouse_id
+  ].filter(Boolean) as string[];
+
   return (
     <div className="max-w-2xl mx-auto">
       <h2 className="text-2xl font-bold text-gray-800 mb-6">
@@ -264,20 +357,22 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ onSuccess, existingProfile })
       )}
       
       <form onSubmit={handleSubmit}>
+        {/* Personal Information Section */}
         <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-6">
           <h3 className="text-lg font-medium text-gray-800 mb-4 flex items-center">
             <User size={20} className="text-teal-600 mr-2" />
             Personal Information
           </h3>
           
+          {/* Profile Picture */}
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Profile Picture (optional)
             </label>
             <div className="flex items-center space-x-4">
-              {formData.profilePicture && (
+              {formData.profile_picture_url && (
                 <img
-                  src={formData.profilePicture}
+                  src={formData.profile_picture_url}
                   alt="Profile"
                   className="w-20 h-20 rounded-full object-cover"
                 />
@@ -292,99 +387,16 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ onSuccess, existingProfile })
               </div>
             </div>
           </div>
-          
+
           <Input
             label="Family Name (optional)"
             type="text"
-            name="familyName"
-            value={formData.familyName}
+            name="family_name"
+            value={formData.family_name}
             onChange={handleChange}
             placeholder="Enter your family name"
           />
-          
-          {/* Father and Mother selection immediately after family name */}
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Father's Name
-            </label>
-            <div className="relative">
-              <div className="flex items-center">
-                <Male size={20} className="text-blue-600 absolute left-3" />
-                <Input
-                  className="pl-10"
-                  placeholder="Search for father by name"
-                  name="fatherName"
-                  value={formData.fatherName}
-                  onChange={(e) => {
-                    handleChange(e);
-                    handleRelativeSearch('father', e.target.value);
-                  }}
-                />
-              </div>
-              
-              {fatherSearchResults.length > 0 && (
-                <div className="absolute z-10 w-full bg-white mt-1 border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
-                  {fatherSearchResults.map((profile) => (
-                    <div
-                      key={profile.id}
-                      className="p-2 hover:bg-gray-100 cursor-pointer flex items-center"
-                      onClick={() => handleRelativeSelect('father', profile)}
-                    >
-                      <Male size={16} className="text-blue-600 mr-2" />
-                      {profile.fullName}
-                      {profile.familyName && (
-                        <span className="text-gray-500 ml-1">
-                          ({profile.familyName})
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-          
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Mother's Name
-            </label>
-            <div className="relative">
-              <div className="flex items-center">
-                <Female size={20} className="text-pink-600 absolute left-3" />
-                <Input
-                  className="pl-10"
-                  placeholder="Search for mother by name"
-                  name="motherName"
-                  value={formData.motherName}
-                  onChange={(e) => {
-                    handleChange(e);
-                    handleRelativeSearch('mother', e.target.value);
-                  }}
-                />
-              </div>
-              
-              {motherSearchResults.length > 0 && (
-                <div className="absolute z-10 w-full bg-white mt-1 border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
-                  {motherSearchResults.map((profile) => (
-                    <div
-                      key={profile.id}
-                      className="p-2 hover:bg-gray-100 cursor-pointer flex items-center"
-                      onClick={() => handleRelativeSelect('mother', profile)}
-                    >
-                      <Female size={16} className="text-pink-600 mr-2" />
-                      {profile.fullName}
-                      {profile.familyName && (
-                        <span className="text-gray-500 ml-1">
-                          ({profile.familyName})
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-          
+
           <Input
             label="Initial (optional)"
             type="text"
@@ -398,10 +410,10 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ onSuccess, existingProfile })
           <Input
             label="Full Name"
             type="text"
-            name="fullName"
-            value={formData.fullName}
+            name="full_name"
+            value={formData.full_name}
             onChange={handleChange}
-            error={errors.fullName}
+            error={errors.full_name}
             placeholder="Enter your full name"
             required
           />
@@ -423,16 +435,16 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ onSuccess, existingProfile })
           <Input
             label="Date of Birth (optional)"
             type="date"
-            name="dateOfBirth"
-            value={formData.dateOfBirth}
+            name="date_of_birth"
+            value={formData.date_of_birth}
             onChange={handleChange}
-            error={errors.dateOfBirth}
+            error={errors.date_of_birth}
           />
           
           <Select
             label="Marital Status"
-            name="maritalStatus"
-            value={formData.maritalStatus}
+            name="marital_status"
+            value={formData.marital_status}
             onChange={handleChange}
             options={[
               { value: 'unmarried', label: 'Unmarried' },
@@ -441,109 +453,65 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ onSuccess, existingProfile })
             required
           />
         </div>
-        
-        {/* Spouse and Children section (only shown if married) */}
-        {formData.maritalStatus === 'married' && (
-          <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-6">
-            <h3 className="text-lg font-medium text-gray-800 mb-4 flex items-center">
-              <Users size={20} className="text-teal-600 mr-2" />
-              Family Details
-            </h3>
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Spouse's Name
-              </label>
-              <div className="relative">
-                <div className="flex items-center">
-                  <Users size={20} className="text-purple-600 absolute left-3" />
-                  <Input
-                    className="pl-10"
-                    placeholder="Search for spouse by name"
-                    name="spouseName"
-                    value={formData.spouseName}
-                    onChange={(e) => {
-                      handleChange(e);
-                      handleRelativeSearch('spouse', e.target.value);
-                    }}
-                  />
-                </div>
-                
-                {spouseSearchResults.length > 0 && (
-                  <div className="absolute z-10 w-full bg-white mt-1 border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
-                    {spouseSearchResults.map((profile) => (
-                      <div
-                        key={profile.id}
-                        className="p-2 hover:bg-gray-100 cursor-pointer flex items-center"
-                        onClick={() => handleRelativeSelect('spouse', profile)}
-                      >
-                        {profile.gender === 'male' ? (
-                          <Male size={16} className="text-blue-600 mr-2" />
-                        ) : (
-                          <Female size={16} className="text-pink-600 mr-2" />
-                        )}
-                        {profile.fullName}
-                        {profile.familyName && (
-                          <span className="text-gray-500 ml-1">
-                            ({profile.familyName})
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            <div className="mt-6">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="text-md font-medium text-gray-700">Children</h4>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleAddChild}
-                  leftIcon={<UserPlus size={16} />}
-                >
-                  Add Child
-                </Button>
-              </div>
-              
-              {formData.children.map((child, index) => (
-                <div key={index} className="flex gap-4 items-start mb-4">
-                  <div className="flex-1">
-                    <Input
-                      placeholder="Child's name"
-                      value={child.name}
-                      onChange={(e) => handleChildChange(index, 'name', e.target.value)}
-                    />
-                  </div>
-                  <div className="w-32">
-                    <Select
-                      value={child.gender}
-                      onChange={(e) => handleChildChange(index, 'gender', e.target.value)}
-                      options={[
-                        { value: 'male', label: 'Male' },
-                        { value: 'female', label: 'Female' },
-                        { value: 'other', label: 'Other' },
-                      ]}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="danger"
-                    size="sm"
-                    onClick={() => handleRemoveChild(index)}
-                  >
-                    Remove
-                  </Button>
-                </div>
-              ))}
-            </div>
+
+        {/* Family Information Section */}
+        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 mb-6">
+          <h3 className="text-lg font-medium text-gray-800 mb-4 flex items-center">
+            <Users size={20} className="text-teal-600 mr-2" />
+            Family Information
+          </h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Father Selection */}
+            <SearchableSelect
+              label="Father's Name"
+              value={formData.father_id}
+              onChange={(id, name) => handleRelativeSelect('father', id, name)}
+              placeholder="Search for father by name..."
+              icon={<Male size={20} className="text-blue-600" />}
+              gender="male"
+              excludeIds={excludeIds}
+            />
+
+            {/* Mother Selection */}
+            <SearchableSelect
+              label="Mother's Name"
+              value={formData.mother_id}
+              onChange={(id, name) => handleRelativeSelect('mother', id, name)}
+              placeholder="Search for mother by name..."
+              icon={<Female size={20} className="text-pink-600" />}
+              gender="female"
+              excludeIds={excludeIds}
+            />
           </div>
-        )}
+
+          {/* Spouse Selection (only shown if married) */}
+          {formData.marital_status === 'married' && (
+            <div className="mt-4">
+              <SearchableSelect
+                label="Spouse's Name"
+                value={formData.spouse_id}
+                onChange={(id, name) => handleRelativeSelect('spouse', id, name)}
+                placeholder="Search for spouse by name..."
+                icon={<Users size={20} className="text-purple-600" />}
+                excludeIds={excludeIds}
+              />
+            </div>
+          )}
+
+          {/* Helpful Information */}
+          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <h4 className="font-medium text-blue-800 mb-2">Tips for Family Connections:</h4>
+            <ul className="text-sm text-blue-700 space-y-1">
+              <li>• Type at least 2 characters to search for existing family members</li>
+              <li>• If family members aren't found, they can register later and connect</li>
+              <li>• You can always edit your profile later to add family connections</li>
+              <li>• Family names help others find and connect with you</li>
+            </ul>
+          </div>
+        </div>
         
-        <div className="flex justify-end">
+        <div className="flex justify-end space-x-4">
           <Button
             type="submit"
             isLoading={isLoading}
