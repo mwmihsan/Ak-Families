@@ -1,209 +1,334 @@
 // Profile management service
 
-import { v4 as uuidv4 } from 'uuid';
-import { Profile, Relationship } from '../types';
-import { 
-  saveProfile, 
-  getProfileById, 
-  getProfileByUserId,
-  getProfiles,
-  saveRelationship,
-  getFamilyMembers
-} from './localStorage';
+// src/services/profile.ts - Updated for Supabase
+import { supabase } from '../lib/supabase'
+import type { Database } from '../lib/supabase'
+import { User } from '@supabase/supabase-js' 
 
-export const createProfile = (
-  userId: string,
-  fullName: string,
-  gender: 'male' | 'female' | 'other',
-  dateOfBirth?: string,
-  fatherId?: string,
-  motherId?: string,
-  spouseId?: string,
-  familyName?: string,
-  initial?: string,
-  maritalStatus: 'married' | 'unmarried' = 'unmarried',
-  profilePicture?: string
-): Profile => {
-  const newProfile: Profile = {
-    id: uuidv4(),
-    userId,
-    familyName,
-    initial,
-    fullName,
-    gender,
-    dateOfBirth,
-    maritalStatus,
-    fatherId,
-    motherId,
-    spouseId,
-    childrenIds: [],
-    profilePicture
-  };
-  
-  saveProfile(newProfile);
-  
-  // Create relationships if parent ids are provided
-  if (fatherId) {
-    createRelationship(fatherId, newProfile.id, 'parent');
-    
-    // Update father's children list
-    const fatherProfile = getProfileById(fatherId);
-    if (fatherProfile) {
-      fatherProfile.childrenIds = [...fatherProfile.childrenIds, newProfile.id];
-      saveProfile(fatherProfile);
-    }
-  }
-  
-  if (motherId) {
-    createRelationship(motherId, newProfile.id, 'parent');
-    
-    // Update mother's children list
-    const motherProfile = getProfileById(motherId);
-    if (motherProfile) {
-      motherProfile.childrenIds = [...motherProfile.childrenIds, newProfile.id];
-      saveProfile(motherProfile);
-    }
-  }
-  
-  // Create spouse relationship if provided
-  if (spouseId) {
-    createRelationship(newProfile.id, spouseId, 'spouse');
-    
-    // Update spouse's profile
-    const spouseProfile = getProfileById(spouseId);
-    if (spouseProfile) {
-      spouseProfile.spouseId = newProfile.id;
-      spouseProfile.maritalStatus = 'married';
-      saveProfile(spouseProfile);
-    }
-  }
-  
-  return newProfile;
-};
+// Updated Profile type to match Supabase schema
+export interface Profile {
+  id: string
+  user_id: string
+  family_name?: string
+  initial?: string
+  full_name: string
+  gender: 'male' | 'female' | 'other'
+  date_of_birth?: string
+  marital_status: 'married' | 'unmarried'
+  profile_picture_url?: string
+  created_at: string
+  updated_at: string
+  // Virtual fields from relationships
+  father_id?: string
+  father_name?: string
+  mother_id?: string
+  mother_name?: string
+  spouse_id?: string
+  spouse_name?: string
+  children?: Profile[]
+}
 
-export const updateProfile = (profile: Profile): Profile => {
-  const existingProfile = getProfileById(profile.id);
-  
-  if (!existingProfile) {
-    throw new Error('Profile not found');
-  }
-  
-  // Handle relationship changes
-  if (profile.fatherId && profile.fatherId !== existingProfile.fatherId) {
-    if (existingProfile.fatherId) {
-      // Remove old relationship
-      // In a real app, we would delete the old relationship
+export interface CreateProfileData {
+  family_name?: string
+  initial?: string
+  full_name: string
+  gender: 'male' | 'female' | 'other'
+  date_of_birth?: string
+  marital_status?: 'married' | 'unmarried'
+  profile_picture_url?: string
+  father_id?: string
+  mother_id?: string
+  spouse_id?: string
+}
+
+export const createProfile = async (profileData: CreateProfileData): Promise<{ profile: Profile | null; error: string | null }> => {
+  try {
+    // Get current user
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError || !user) {
+      throw new Error('User not authenticated')
     }
-    createRelationship(profile.fatherId, profile.id, 'parent');
+
+    // Start a transaction-like operation
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .insert([{
+        user_id: user.id,
+        family_name: profileData.family_name,
+        initial: profileData.initial,
+        full_name: profileData.full_name,
+        gender: profileData.gender,
+        date_of_birth: profileData.date_of_birth,
+        marital_status: profileData.marital_status || 'unmarried',
+        profile_picture_url: profileData.profile_picture_url
+      }])
+      .select()
+      .single()
+
+    if (profileError) {
+      throw new Error(profileError.message)
+    }
+
+    // Create family relationships
+    const relationshipPromises = []
+
+    if (profileData.father_id) {
+      relationshipPromises.push(
+        supabase
+          .from('family_relationships')
+          .insert([{
+            parent_id: profileData.father_id,
+            child_id: profile.id,
+            relationship_type: 'father'
+          }])
+      )
+    }
+
+    if (profileData.mother_id) {
+      relationshipPromises.push(
+        supabase
+          .from('family_relationships')
+          .insert([{
+            parent_id: profileData.mother_id,
+            child_id: profile.id,
+            relationship_type: 'mother'
+          }])
+      )
+    }
+
+    if (profileData.spouse_id) {
+      relationshipPromises.push(
+        supabase
+          .from('spouse_relationships')
+          .insert([{
+            spouse_1_id: profile.id,
+            spouse_2_id: profileData.spouse_id
+          }])
+      )
+
+      // Update marital status for both profiles
+      relationshipPromises.push(
+        supabase
+          .from('profiles')
+          .update({ marital_status: 'married' })
+          .eq('id', profileData.spouse_id)
+      )
+    }
+
+    // Execute all relationship insertions
+    const relationshipResults = await Promise.allSettled(relationshipPromises)
     
-    // Update father's children list
-    const fatherProfile = getProfileById(profile.fatherId);
-    if (fatherProfile) {
-      fatherProfile.childrenIds = [...fatherProfile.childrenIds, profile.id];
-      saveProfile(fatherProfile);
-    }
-  }
-  
-  if (profile.motherId && profile.motherId !== existingProfile.motherId) {
-    if (existingProfile.motherId) {
-      // Remove old relationship
-      // In a real app, we would delete the old relationship
-    }
-    createRelationship(profile.motherId, profile.id, 'parent');
-    
-    // Update mother's children list
-    const motherProfile = getProfileById(profile.motherId);
-    if (motherProfile) {
-      motherProfile.childrenIds = [...motherProfile.childrenIds, profile.id];
-      saveProfile(motherProfile);
-    }
-  }
-  
-  if (profile.spouseId && profile.spouseId !== existingProfile.spouseId) {
-    if (existingProfile.spouseId) {
-      // Update old spouse's profile
-      const oldSpouse = getProfileById(existingProfile.spouseId);
-      if (oldSpouse) {
-        oldSpouse.spouseId = undefined;
-        oldSpouse.maritalStatus = 'unmarried';
-        saveProfile(oldSpouse);
+    // Check for any relationship errors (non-critical)
+    relationshipResults.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.warn(`Relationship creation failed at index ${index}:`, result.reason)
       }
-    }
-    
-    createRelationship(profile.id, profile.spouseId, 'spouse');
-    
-    // Update new spouse's profile
-    const spouseProfile = getProfileById(profile.spouseId);
-    if (spouseProfile) {
-      spouseProfile.spouseId = profile.id;
-      spouseProfile.maritalStatus = 'married';
-      saveProfile(spouseProfile);
-    }
-  } else if (!profile.spouseId && existingProfile.spouseId) {
-    // Handle spouse removal
-    const oldSpouse = getProfileById(existingProfile.spouseId);
-    if (oldSpouse) {
-      oldSpouse.spouseId = undefined;
-      oldSpouse.maritalStatus = 'unmarried';
-      saveProfile(oldSpouse);
+    })
+
+    return { profile, error: null }
+  } catch (error) {
+    console.error('Create profile error:', error)
+    return { 
+      profile: null, 
+      error: error instanceof Error ? error.message : 'Failed to create profile' 
     }
   }
-  
-  saveProfile(profile);
-  return profile;
-};
+}
 
-export const getUserProfile = (userId: string): Profile | undefined => {
-  return getProfileByUserId(userId);
-};
+export const updateProfile = async (profileId: string, updates: Partial<CreateProfileData>): Promise<{ profile: Profile | null; error: string | null }> => {
+  try {
+    // Update the profile
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .update({
+        family_name: updates.family_name,
+        initial: updates.initial,
+        full_name: updates.full_name,
+        gender: updates.gender,
+        date_of_birth: updates.date_of_birth,
+        marital_status: updates.marital_status,
+        profile_picture_url: updates.profile_picture_url
+      })
+      .eq('id', profileId)
+      .select()
+      .single()
 
-export const createRelationship = (
-  fromProfileId: string, 
-  toProfileId: string, 
-  type: 'parent' | 'child' | 'spouse'
-): void => {
-  const relationship: Relationship = {
-    from: fromProfileId,
-    to: toProfileId,
-    type
-  };
-  
-  saveRelationship(relationship);
-  
-  // For spouse relationships, create the reverse relationship as well
-  if (type === 'spouse') {
-    const reverseRelationship: Relationship = {
-      from: toProfileId,
-      to: fromProfileId,
-      type
-    };
-    saveRelationship(reverseRelationship);
+    if (profileError) {
+      throw new Error(profileError.message)
+    }
+
+    // Handle relationship updates (this is more complex and might need separate functions)
+    // For now, we'll keep the existing relationships and let the UI handle changes
+
+    return { profile, error: null }
+  } catch (error) {
+    console.error('Update profile error:', error)
+    return { 
+      profile: null, 
+      error: error instanceof Error ? error.message : 'Failed to update profile' 
+    }
   }
-  
-  // For parent relationships, create the reverse child relationship
-  if (type === 'parent') {
-    const childRelationship: Relationship = {
-      from: toProfileId,
-      to: fromProfileId,
-      type: 'child'
-    };
-    saveRelationship(childRelationship);
+}
+
+export const getUserProfile = async (userId?: string): Promise<Profile | null> => {
+  try {
+    let targetUserId = userId
+
+    if (!targetUserId) {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return null
+      targetUserId = user.id
+    }
+
+    const { data: profile, error } = await supabase
+      .from('profile_with_relationships')
+      .select('*')
+      .eq('user_id', targetUserId)
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        // No profile found
+        return null
+      }
+      throw new Error(error.message)
+    }
+
+    return profile
+  } catch (error) {
+    console.error('Get user profile error:', error)
+    return null
   }
-};
+}
 
-export const findRelatives = (searchTerm: string): Profile[] => {
-  const profiles = getProfiles();
-  const lowerSearchTerm = searchTerm.toLowerCase();
-  
-  return profiles.filter(profile => 
-    profile.fullName.toLowerCase().includes(lowerSearchTerm) ||
-    (profile.familyName && profile.familyName.toLowerCase().includes(lowerSearchTerm)) ||
-    (profile.initial && profile.initial.toLowerCase().includes(lowerSearchTerm))
-  );
-};
+export const getProfileById = async (profileId: string): Promise<Profile | null> => {
+  try {
+    const { data: profile, error } = await supabase
+      .from('profile_with_relationships')
+      .select('*')
+      .eq('id', profileId)
+      .single()
 
-export const getSuggestedRelatives = (profileId: string): Profile[] => {
-  // In a real application, this would use more sophisticated matching
-  // For now, just return family members
-  return getFamilyMembers(profileId);
-};
+    if (error) {
+      if (error.code === 'PGRST116') {
+        // No profile found
+        return null
+      }
+      throw new Error(error.message)
+    }
+
+    return profile
+  } catch (error) {
+    console.error('Get profile by ID error:', error)
+    return null
+  }
+}
+
+export const searchProfiles = async (query: string, limit: number = 10): Promise<Profile[]> => {
+  try {
+    if (query.length < 2) return []
+
+    const { data: profiles, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .or(`full_name.ilike.%${query}%,family_name.ilike.%${query}%,initial.ilike.%${query}%`)
+      .limit(limit)
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return profiles || []
+  } catch (error) {
+    console.error('Search profiles error:', error)
+    return []
+  }
+}
+
+export const getChildren = async (profileId: string): Promise<Profile[]> => {
+  try {
+    const { data: children, error } = await supabase
+      .from('profiles')
+      .select(`
+        *
+      `)
+      .in('id', 
+        supabase
+          .from('family_relationships')
+          .select('child_id')
+          .eq('parent_id', profileId)
+      )
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return children || []
+  } catch (error) {
+    console.error('Get children error:', error)
+    return []
+  }
+}
+
+export const getFamilyNetwork = async (profileId: string): Promise<Profile[]> => {
+  try {
+    // This is a complex query to get all related family members
+    // We'll use a stored procedure for better performance
+    const { data: familyMembers, error } = await supabase
+      .rpc('get_family_network', { profile_id: profileId })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    return familyMembers || []
+  } catch (error) {
+    console.error('Get family network error:', error)
+    return []
+  }
+}
+
+// Helper function to upload profile picture
+export const uploadProfilePicture = async (file: File, profileId: string): Promise<{ url: string | null; error: string | null }> => {
+  try {
+    const fileExt = file.name.split('.').pop()
+    const fileName = `${profileId}/profile.${fileExt}`
+
+    const { data, error: uploadError } = await supabase.storage
+      .from('profile-pictures')
+      .upload(fileName, file, {
+        cacheControl: '3600',
+        upsert: true
+      })
+
+    if (uploadError) {
+      throw new Error(uploadError.message)
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('profile-pictures')
+      .getPublicUrl(fileName)
+
+    // Update profile with the new picture URL
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({ profile_picture_url: publicUrl })
+      .eq('id', profileId)
+
+    if (updateError) {
+      throw new Error(updateError.message)
+    }
+
+    return { url: publicUrl, error: null }
+  } catch (error) {
+    console.error('Upload profile picture error:', error)
+    return { 
+      url: null, 
+      error: error instanceof Error ? error.message : 'Failed to upload picture' 
+    }
+  }
+}
+
+// Legacy functions for compatibility (will be removed later)
+export const findRelatives = searchProfiles
+export const getSuggestedRelatives = getFamilyNetwork
