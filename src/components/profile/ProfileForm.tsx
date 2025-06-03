@@ -1,4 +1,5 @@
 // src/components/profile/ProfileForm.tsx - Enhanced with searchable dropdowns
+// src/components/profile/ProfileForm.tsx - Enhanced with searchable dropdowns
 import React, { useState, useEffect, useRef } from 'react';
 import { User, Calendar, Scale as Male, Scale as Female, Users, Image as ImageIcon, UserPlus, Search, X } from 'lucide-react';
 import Input from '../ui/Input';
